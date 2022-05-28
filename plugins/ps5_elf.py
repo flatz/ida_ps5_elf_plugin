@@ -384,6 +384,13 @@ def load_known_nids(file_name):
 			nid_ascii, nid = ObjectInfo.encode_nid(name)
 			nids[nid] = name
 
+			# Try to prepend underscore symbol to symbol, thus getting a new one.
+			if name.startswith('_'):
+				name = name[1:]
+			name = '_' + name
+			nid_ascii, nid = ObjectInfo.encode_nid(name)
+			nids[nid] = name
+
 	return nids
 
 class ElfUtil(object):
@@ -1111,6 +1118,7 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		elf = ElfUtil()
 		if elf.is_inited():
 			ehdr = elf.ehdr
+			is_just_loaded = False
 		else:
 			ehdr_struct_name = 'Elf64_Ehdr'
 			ehdr_size = get_struct_size(ehdr_struct_name)
@@ -1153,6 +1161,8 @@ class ElfPlugin(ida_idaapi.plugin_t):
 			else:
 				node = ida_netnode.netnode()
 				node.create(ElfPlugin.PROSPERO_NET_NODE)
+
+			is_just_loaded = True
 
 		# Determine file type.
 		file_type_str = {
@@ -1200,7 +1210,7 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		ida_idaapi.require('gcc_extab')
 
 		# Set up analyzer on the first load.
-		if not elf.is_inited():
+		if is_just_loaded:
 			self.setup_analysis()
 		else:
 			self.elf = elf
@@ -1218,13 +1228,8 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		self.idb_hooks.unhook()
 		self.ui_hooks.unhook()
 
-	def is_just_loaded(self):
-		return not self.elf or not self.elf.is_inited()
-
 	def setup_analysis(self):
 		# Set up common parameters.
-		info = ida_idaapi.get_inf_structure()
-
 		ida_ida.inf_set_ostype(0x6) # BSD OS
 		ida_ida.inf_set_demnames(ida_ida.DEMNAM_NAME | ida_ida.DEMNAM_GCC3) # use GCC mangling names
 
@@ -1244,6 +1249,7 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		ida_ida.inf_set_mark_code(False) # Do not find functions inside .data segments.
 		ida_ida.inf_set_create_func_tails(False) # Don not create function tails.
 		ida_ida.inf_set_noflow_to_data(True) # Control flow to data segment is ignored.
+		ida_ida.inf_set_rename_jumpfunc(False) # Rename jump functions as J_.
 
 	def _fixup_segment(self, seg):
 		image_base = ida_nalt.get_imagebase()
@@ -2453,8 +2459,8 @@ class ElfPlugin(ida_idaapi.plugin_t):
 			name_ex = symbol.get_name_ex()
 			comment = symbol.get_name_comment()
 
-			stub_name = '_B%s' % name_ex
-			stub_ptr_name = '_PG%s' % name_ex
+			stub_name = '/B%s' % name_ex
+			stub_ptr_name = '/PG%s' % name_ex
 
 			stub_ptr_ea = record.entry['r_offset']
 			stub_ea = ida_bytes.get_qword(record.entry['r_offset'])
@@ -2527,7 +2533,7 @@ class ElfPlugin(ida_idaapi.plugin_t):
 
 			ea, addend = as_uint64(record.entry['r_offset']), as_uint64(record.entry['r_addend'])
 
-			if reloc_type == RelaRelocTable.R_AMD64_GLOB_DAT:
+			if reloc_type in [RelaRelocTable.R_AMD64_GLOB_DAT, RelaRelocTable.R_AMD64_64]:
 				symbol_idx = record.get_symbol_idx()
 				if symbol_idx < len(self.symbols):
 					symbol = self.symbols[symbol_idx]
@@ -2550,16 +2556,6 @@ class ElfPlugin(ida_idaapi.plugin_t):
 					# TODO: Is it correct?
 					#print('Warning! Rela relocation table entry #%d have invalid symbol idx #%d.' % (i, symbol_idx))
 					continue
-			elif reloc_type == RelaRelocTable.R_AMD64_64:
-				# TODO: Do we need this?
-				#ida_bytes.put_qword(ea, as_uint64(ea + addend))
-				pass
-			elif reloc_type == RelaRelocTable.R_AMD64_RELATIVE:
-				# TODO: Do we need this?
-				#ida_bytes.put_qword(ea, addend)
-				#ida_bytes.create_qword(ea, 0x8, True)
-				#ida_xref.add_dref(ea, addend, ida_xref.dr_O | ida_xref.XREF_USER)
-				pass
 			else:
 				print('Warning! Unsupported relocation type 0x%x for rela relocation table entry #%d.' % (reloc_type, i))
 				continue
@@ -2687,6 +2683,10 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		self._fixup_bss_segment()
 		self._fixup_extra_segments()
 		self._fixup_symbols()
+
+		# Allow to rename jump functions now because we did set up correct symbol names already.
+		ida_ida.inf_set_rename_jumpfunc(True) # Rename jump functions as J_.
+
 		self._fixup_plt_segment()
 		self._fixup_relocations()
 		self._fixup_exports()
