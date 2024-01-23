@@ -1544,12 +1544,15 @@ class ElfPlugin(ida_idaapi.plugin_t):
 
 			data = f.read(struct.calcsize('2I'))
 			if len(data) != struct.calcsize('2I'):
-				raise RuntimeError('Truncated data at comment segment.')
+				print('Truncated data at comment segment.')
+				return False
+				
 			max_length, length = struct.unpack('<2I', data)
 
 			value = f.read(length)
 			if len(value) != length:
-				raise RuntimeError('Truncated data at comment segment.')
+				print('Truncated data at comment segment.')
+				return False;
 
 			# Try to decode value as UTF-8 string.
 			try:
