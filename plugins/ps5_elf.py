@@ -19,7 +19,6 @@ import ida_name
 import ida_netnode
 import ida_search
 import ida_segment
-import ida_struct
 import ida_typeinf
 import ida_ua
 import ida_xref
@@ -61,27 +60,106 @@ def hexdump(data, cols=16, addr=0):
 
 	print('\n'.join(lines))
 
-def unpack_by_type(data, size, flags):
+def determine_simple_type(type_decl):
+	return {
+		'uint8_t': 'uint8_t',
+		'__uint8': 'uint8_t',
+		'unsigned int8_t': 'uint8_t',
+		'unsigned __int8': 'uint8_t',
+		'unsigned char': 'uint8_t',
+		'int8_t': 'int8_t',
+		'__int8': 'int8_t',
+		'signed int8_t': 'int8_t',
+		'signed __int8': 'int8_t',
+		'char': 'int8_t',
+
+		'uint16_t': 'uint16_t',
+		'__uint16': 'uint16_t',
+		'unsigned int16_t': 'uint16_t',
+		'unsigned __int16': 'uint16_t',
+		'unsigned short': 'uint16_t',
+		'int16_t': 'int16_t',
+		'__int16': 'int16_t',
+		'signed int16_t': 'int16_t',
+		'signed __int16': 'int16_t',
+		'short': 'int16_t',
+
+		'uint32_t': 'uint32_t',
+		'__uint32': 'uint32_t',
+		'unsigned int32_t': 'uint32_t',
+		'unsigned __int32': 'uint32_t',
+		'unsigned int': 'uint32_t',
+		'int32_t': 'int32_t',
+		'__int32': 'int32_t',
+		'signed int32_t': 'int32_t',
+		'signed __int32': 'int32_t',
+		'int': 'int32_t',
+
+		'uint64_t': 'uint64_t',
+		'__uint64': 'uint64_t',
+		'unsigned int64_t': 'uint64_t',
+		'unsigned __int64': 'uint64_t',
+		'unsigned long': 'uint64_t',
+		'unsigned long long': 'uint64_t',
+		'int64_t': 'int64_t',
+		'__int64': 'int64_t',
+		'signed int64_t': 'int64_t',
+		'signed __int64': 'int64_t',
+		'long': 'int64_t',
+		'long long': 'int64_t',
+	}.get(type_decl, None)
+
+def unpack_by_type(data, size, type_info):
 	assert len(data) >= size
+
+	initial_type_name = type_info.dstr()
+	initial_final_type_name = type_info.get_final_type_name()
 
 	data = data[:size]
 	endian = '>' if ida_ida.inf_is_be() else '<'
 
 	fmt = None
-	if ida_bytes.is_byte(flags): fmt = 'B'
-	elif ida_bytes.is_word(flags): fmt = 'H'
-	elif ida_bytes.is_dword(flags): fmt = 'I'
-	elif ida_bytes.is_qword(flags): fmt = 'Q'
-	elif ida_bytes.is_strlit(flags):
-		value = data.split(b'\0', maxsplit=1).decode('utf-8')
-		size = len(value) # TODO: Is null terminator needed to be included?
-	elif ida_bytes.is_float(flags): fmt = 'f'
-	elif ida_bytes.is_double(flags): fmt = 'd'
-	elif ida_bytes.is_struct(flags):
+	value = None
+
+	if type_info.is_array():
+		type_info = type_info.get_array_element()
+		type_name = type_info.dstr()
+		final_type_name = type_info.get_final_type_name()
+		if final_type_name is None:
+			final_type_name = type_name
+		final_type_name = determine_simple_type(final_type_name)
+	else:
+		type_name = initial_type_name
+		final_type_name = initial_final_type_name
+		if final_type_name is None:
+			final_type_name = type_name
+		final_type_name = determine_simple_type(final_type_name)
+
+	if final_type_name == 'uint8_t':
+		fmt = 'B'
+	elif final_type_name == 'int8_t':
+		fmt = 'b'
+	elif final_type_name == 'uint16_t':
+		fmt = 'H'
+	elif final_type_name == 'int16_t':
+		fmt = 'h'
+	elif final_type_name == 'uint32_t':
+		fmt = 'I'
+	elif final_type_name == 'int32_t':
+		fmt = 'i'
+	elif final_type_name == 'uint64_t':
+		fmt = 'Q'
+	elif final_type_name == 'int64_t':
+		fmt = 'q'
+	elif final_type_name == 'float':
+		fmt = 'f'
+	elif final_type_name == 'double':
+		fmt = 'd'
+	elif type_info.is_ptr():
+		fmt = 'Q'
+	else:
 		# XXX: Need to handle this manually.
 		value = data
-	else:
-		value = None
 
 	if fmt is not None:
 		stride = struct.calcsize(fmt)
@@ -99,41 +177,48 @@ def unpack_by_type(data, size, flags):
 def get_struct_size(name):
 	assert isinstance(name, str)
 
-	sid = ida_struct.get_struc_id(name)
-	if sid == ida_netnode.BADNODE:
+	type_id = ida_typeinf.get_named_type_tid(name)
+	type_info = ida_typeinf.tinfo_t()
+	if type_id == ida_idaapi.BADADDR or not type_info.get_type_by_tid(type_id) or not type_info.is_udt():
 		raise RuntimeError('Structure not found: %s' % name)
 
-	return ida_struct.get_struc_size(sid)
+	return type_info.get_size()
 
 def parse_struct(name, data):
 	assert isinstance(name, str)
 	assert isinstance(data, bytes)
 
-	sid = ida_struct.get_struc_id(name)
-	if sid == ida_netnode.BADNODE:
+	type_id = ida_typeinf.get_named_type_tid(name)
+	type_info = ida_typeinf.tinfo_t()
+	if type_id == ida_idaapi.BADADDR or not type_info.get_type_by_tid(type_id) or not type_info.is_udt():
 		raise RuntimeError('Structure not found: %s' % name)
 
-	total_size = ida_struct.get_struc_size(sid)
+	total_size = type_info.get_size()
 	assert len(data) >= total_size
 
-	offset = idc.get_first_member(sid)
-	last_offset = idc.get_last_member(sid)
-	count = idc.get_member_qty(sid)
+	udt = ida_typeinf.udt_type_data_t()
+	assert type_info.get_udt_details(udt)
+	count = type_info.get_udt_nmembers()
+
+	#if type_info.is_typedef():
+	#	return None
 
 	fields = OrderedDict()
 
-	while True:
-		name = idc.get_member_name(sid, offset)
-		size = idc.get_member_size(sid, offset)
-		flag = idc.get_member_flag(sid, offset)
+	for idx, udm in enumerate(udt):
+		if udm.is_gap():
+			continue
 
-		info = unpack_by_type(data[offset:offset + size], size, flag)
-		fields[name] = info[0]
+		member_name = udm.name
+		member_offset = udm.offset // 8
+		member_size = udm.size // 8
+		member_type_info = udm.type
 
-		if offset == last_offset:
-			break
+		value_data = data[member_offset:member_offset + member_size]
 
-		offset = idc.get_next_offset(sid, offset)
+		info = unpack_by_type(value_data, member_size, member_type_info)
+
+		fields[member_name] = info[0]
 
 	return fields
 
@@ -600,7 +685,7 @@ class ElfUtil(object):
 	def is_inited(self):
 		if self.elf_node.valobj() is None:
 			return False
-		node = ida_netnode.netnode(ElfPlugin.PROSPERO_NET_NODE)
+		node = ida_netnode.netnode(ps5_elf_plugin_t.PROSPERO_NET_NODE)
 		return ida_netnode.exist(node)
 
 	@staticmethod
@@ -988,14 +1073,10 @@ class IdTable(ElfTable):
 	def type_name(self):
 		return 'ELF ID Table'
 
-class ElfPlugin(ida_idaapi.plugin_t):
-	PLUGIN_NAME = 'PS5 elf plugin'
-	PLUGIN_VERSION = '0.0.1'
-	PLUGIN_AUTHORS = 'flatz'
-
+class ps5_elf_plugin_t(ida_idaapi.plugin_t):
 	flags = ida_idaapi.PLUGIN_PROC
-	wanted_name = PLUGIN_NAME
-	comment = '%s to extend loader functionality' % PLUGIN_NAME
+	wanted_name = 'PS5 elf plugin'
+	comment = f'{wanted_name} to extend loader functionality'
 	wanted_hotkey = ''
 	help = ''
 
@@ -1086,9 +1167,9 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		self.nids = None
 		self.symbols = None
 
-		self.ui_hooks = ElfPlugin.UiHooks(self)
-		self.idb_hooks = ElfPlugin.IdbHooks(self)
-		self.idp_hooks = ElfPlugin.IdpHooks(self)
+		self.ui_hooks = ps5_elf_plugin_t.UiHooks(self)
+		self.idb_hooks = ps5_elf_plugin_t.IdbHooks(self)
+		self.idp_hooks = ps5_elf_plugin_t.IdpHooks(self)
 
 	def init(self):
 		# Cannot be used in terminal mode.
@@ -1098,7 +1179,7 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		if not ida_hexrays.init_hexrays_plugin():
 			return ida_idaapi.PLUGIN_SKIP
 
-		print('Initializing plugin: %s' % ElfPlugin.description())
+		print(f'Initializing plugin: {self.wanted_name}')
 
 		file_path = ida_nalt.get_input_file_path()
 		file_name = ida_nalt.get_root_filename()
@@ -1153,14 +1234,15 @@ class ElfPlugin(ida_idaapi.plugin_t):
 
 						is_prospero_elf = True
 						break
-			except:
+			except Exception as e:
+				#print('Got exception during header parsing attempt:', e)
 				pass
 
 			if not is_prospero_elf:
 				return ida_idaapi.PLUGIN_SKIP
 			else:
 				node = ida_netnode.netnode()
-				node.create(ElfPlugin.PROSPERO_NET_NODE)
+				node.create(ps5_elf_plugin_t.PROSPERO_NET_NODE)
 
 			is_just_loaded = True
 
@@ -1222,7 +1304,7 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		return ida_idaapi.PLUGIN_KEEP
 
 	def term(self):
-		#print('Terminating plugin: %s' % ElfPlugin.description())
+		#print(f'Terminating plugin: {self.wanted_name}')
 
 		self.idp_hooks.unhook()
 		self.idb_hooks.unhook()
@@ -1544,15 +1626,15 @@ class ElfPlugin(ida_idaapi.plugin_t):
 
 			data = f.read(struct.calcsize('2I'))
 			if len(data) != struct.calcsize('2I'):
-				print('Truncated data at comment segment.')
+				ida_kernwin.warning('Truncated data at comment segment.')
 				return False
-				
-			max_length, length = struct.unpack('<2I', data)
 
+			max_length, length = struct.unpack('<2I', data)
 			value = f.read(length)
+
 			if len(value) != length:
-				print('Truncated data at comment segment.')
-				return False;
+				ida_kernwin.warning('Truncated data at comment segment.')
+				return False
 
 			# Try to decode value as UTF-8 string.
 			try:
@@ -1584,7 +1666,8 @@ class ElfPlugin(ida_idaapi.plugin_t):
 				# Reached end of file.
 				break
 			elif len(data) != struct.calcsize('2H'):
-				raise RuntimeError('Truncated data at version segment.')
+				ida_kernwin.warning('Truncated data at version segment.')
+				return False
 
 			reserved, length = struct.unpack('<2H', data)
 			assert reserved == 0
@@ -1593,9 +1676,10 @@ class ElfPlugin(ida_idaapi.plugin_t):
 
 			data = f.read(length)
 			if len(data) != length:
-				raise RuntimeError('Truncated data at version segment.')
-			type_id, data = data[0], data[1:]
+				ida_kernwin.warning('Truncated data at version segment.')
+				return False
 
+			type_id, data = data[0], data[1:]
 			if type_id == 0x8:
 				name, version = data.split(b':')
 				name = name.decode('ascii')
@@ -2295,8 +2379,8 @@ class ElfPlugin(ida_idaapi.plugin_t):
 	def fixup_func_bounds(self, func, max_func_end_ea):
 		end_ea = func.end_ea
 
-		data = ida_bytes.get_bytes(end_ea, len(ElfPlugin.UD2_INSN_BYTES))
-		if not data or data != ElfPlugin.UD2_INSN_BYTES:
+		data = ida_bytes.get_bytes(end_ea, len(ps5_elf_plugin_t.UD2_INSN_BYTES))
+		if not data or data != ps5_elf_plugin_t.UD2_INSN_BYTES:
 			return
 
 		end_ea += len(data)
@@ -2406,7 +2490,7 @@ class ElfPlugin(ida_idaapi.plugin_t):
 			return False
 
 		# Need to find: jmp cs:<ea>
-		plt_base_ea = ida_search.find_binary(plt_start_ea + len(base_insns), super_seg.end_ea, 'FF 25', 16, ida_search.SEARCH_DOWN | ida_search.SEARCH_CASE)
+		plt_base_ea = ida_bytes.find_bytes('FF 25', range_start = plt_start_ea + len(base_insns), range_end = super_seg.end_ea, flags = ida_search.SEARCH_DOWN | ida_search.SEARCH_CASE)
 		if plt_base_ea == ida_idaapi.BADADDR:
 			ida_kernwin.warning('Unable to find .plt base ea, cannot fixup .plt segment.')
 			return False
@@ -2721,9 +2805,5 @@ class ElfPlugin(ida_idaapi.plugin_t):
 		ida_kernwin.warning('Running as script is not possible.')
 		return False
 
-	@staticmethod
-	def description():
-		return '%s v%s' % (ElfPlugin.PLUGIN_NAME, ElfPlugin.PLUGIN_VERSION)
-
 def PLUGIN_ENTRY():
-	return ElfPlugin()
+	return ps5_elf_plugin_t()
