@@ -1317,13 +1317,13 @@ class ps5_elf_plugin_t(ida_idaapi.plugin_t):
 
 		# Set up compiler parameters.
 		ida_ida.inf_set_cc_id(ida_typeinf.COMP_GNU)
-		ida_ida.inf_set_cc_cm(ida_typeinf.CM_N64 | ida_typeinf.CM_M_NN | ida_typeinf.CM_CC_CDECL)
+		ida_ida.inf_set_cc_cm(ida_typeinf.CM_N64 | ida_typeinf.CM_M_NN | ida_typeinf.CM_CC_FASTCALL)
 		ida_ida.inf_set_cc_size_b(1)
 		ida_ida.inf_set_cc_size_s(2)
 		ida_ida.inf_set_cc_size_i(4)
 		ida_ida.inf_set_cc_size_e(4)
 		ida_ida.inf_set_cc_size_l(8)
-		ida_ida.inf_set_cc_size_l(8)
+		ida_ida.inf_set_cc_size_ll(8)
 		ida_ida.inf_set_cc_size_ldbl(8)
 		ida_ida.inf_set_cc_defalign(0)
 
@@ -1948,14 +1948,14 @@ class ps5_elf_plugin_t(ida_idaapi.plugin_t):
 
 	def _fixup_process_param_segment(self, segment_name, struct_name, data):
 		fmt = '<4s3I5Q'
-		extra_fmt = '<3Q'
+		extra_fmt = '<4Q'
 		data_size = len(data)
 		expected_size = struct.calcsize(fmt)
 		expected_extra_size = struct.calcsize(extra_fmt)
 		if data_size < expected_size:
 			raise RuntimeError('Unsupported size of %s structure: 0x%x (expected: 0x%x)' % (struct_name, data_size, expected_size))
 		elif data_size > expected_size + expected_extra_size:
-			ida_kernwin.warning('Size of %s structure is larger than expected: 0x%x (expected: 0x%x)' % (struct_name, data_size, expected_size + expected_extra_size))
+			print('Warning! Size of %s structure is larger than expected: 0x%x (expected: 0x%x)' % (struct_name, data_size, expected_size + expected_extra_size))
 
 		# TODO: Check these fields.
 		magic, entry_count, sdk_version, unk1, process_name_ea, user_main_thread_name_ea, user_main_thread_priority_ea, user_main_thread_stack_size_ea, libc_param_ea = struct.unpack(fmt, data[:expected_size])
@@ -1964,24 +1964,26 @@ class ps5_elf_plugin_t(ida_idaapi.plugin_t):
 		offset = expected_size
 		data_size -= offset
 
-		# TODO: Check if it is really an address and not a value.
 		kernel_mem_param_ea = ida_idaapi.BADADDR
 		if data_size >= 0x8:
 			kernel_mem_param_ea, = struct.unpack('<Q', data[offset:offset + struct.calcsize('Q')])
 			offset += struct.calcsize('Q')
 			data_size -= struct.calcsize('Q')
 
-		# TODO: Check if it is really an address and not a value.
 		kernel_fs_param_ea = ida_idaapi.BADADDR
 		if data_size >= 0x8:
 			kernel_fs_param_ea, = struct.unpack('<Q', data[offset:offset + struct.calcsize('Q')])
 			offset += struct.calcsize('Q')
 			data_size -= struct.calcsize('Q')
 
-		# TODO: Check if it is really an address and not a value.
 		process_preload_enabled_ea = ida_idaapi.BADADDR
 		if data_size >= 0x8:
 			process_preload_enabled_ea, = struct.unpack('<Q', data[offset:offset + struct.calcsize('Q')])
+			offset += struct.calcsize('Q')
+			data_size -= struct.calcsize('Q')
+
+		if data_size >= 0x8:
+			one, = struct.unpack('<Q', data[offset:offset + struct.calcsize('Q')])
 			offset += struct.calcsize('Q')
 			data_size -= struct.calcsize('Q')
 
@@ -2012,7 +2014,7 @@ class ps5_elf_plugin_t(ida_idaapi.plugin_t):
 		if data_size < expected_size:
 			raise RuntimeError('Unsupported size of %s structure: 0x%x (expected: 0x%x)' % (struct_name, data_size, expected_size))
 		elif data_size > expected_size:
-			ida_kernwin.warning('Size of %s structure is larger than expected: 0x%x (expected: 0x%x)' % (struct_name, data_size, expected_size))
+			print('Warning! Size of %s structure is larger than expected: 0x%x (expected: 0x%x)' % (struct_name, data_size, expected_size))
 
 		# TODO: Check these fields.
 		magic, entry_count, sdk_version, unk1, unk2 = struct.unpack(fmt, data[:expected_size])
@@ -2643,6 +2645,8 @@ class ps5_elf_plugin_t(ida_idaapi.plugin_t):
 					# TODO: Is it correct?
 					#print('Warning! Rela relocation table entry #%d have invalid symbol idx #%d.' % (i, symbol_idx))
 					continue
+			elif reloc_type == RelaRelocTable.R_AMD64_RELATIVE:
+				continue
 			else:
 				print('Warning! Unsupported relocation type 0x%x for rela relocation table entry #%d.' % (reloc_type, i))
 				continue

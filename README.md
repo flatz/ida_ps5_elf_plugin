@@ -1,4 +1,4 @@
-## IDA PS5 .elf plugin (c) 2021-2022 by flatz
+## IDA PS5 .elf plugin (c) 2021-2026 by flatz
 
 # Instructions
 * Put all files into their corresponding directories by keeping this directory's structure.
